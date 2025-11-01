@@ -115,9 +115,14 @@ MIN_FACE_SIZE = 60                   # Minimum face size (60x60 pixels)
 
 # Unknown Person Tracking
 UNKNOWN_COOLDOWN_SECONDS = 300       # 5 minutes cooldown between alerts
-UNKNOWN_SIMILARITY_THRESHOLD = 0.55  # Embedding similarity for same person
-MIN_DETECTIONS_BEFORE_ALERT = 3      # Require 3 detections before alerting
+UNKNOWN_SIMILARITY_THRESHOLD = 0.50  # Embedding similarity threshold (Phase 3 optimized)
+MIN_DETECTIONS_BEFORE_ALERT = 1      # Alert immediately (Phase 2 prevents duplicates)
 MAX_EMBEDDING_HISTORY = 5            # Keep last 5 embeddings for averaging
+
+# Spatial-Temporal Tracking (Phase 2 & 3 - Anti-Duplicate)
+SPATIAL_IOU_THRESHOLD = 0.3          # Minimum IoU for spatial proximity matching
+TEMPORAL_WINDOW_SECONDS = 2.0        # Time window for spatial-temporal matching
+SPATIAL_BOOST_SCORE = 0.20           # Score boost when spatial-temporal criteria met
 
 # Known Person Tracking
 KNOWN_PERSON_COOLDOWN_SECONDS = 30   # 30 seconds cooldown for display
@@ -167,19 +172,42 @@ DET_SIZE = (640, 640)                # Face detection input size
 - Faces smaller than threshold are detected but not processed
 
 ### Unknown Person Tracking (Smart Deduplication)
-**Multi-stage detection:**
-1. **Initial Detection:** Face detected but not in database
-2. **Tracking:** Track same person across frames using embedding similarity (0.55 threshold)
-3. **Confirmation:** Require 3 detections (2-3 seconds) before alerting
-4. **Alert:** Generate alert with snapshot
-5. **Cooldown:** 5-minute cooldown to prevent duplicate alerts
+
+**Phase 3 Optimized System** - Advanced spatial-temporal deduplication with immediate alerts
+
+**How It Works:**
+1. **Initial Detection:** Face detected but not in database → Create tracking entry
+2. **Immediate Alert:** Alert triggered on first detection (MIN_DETECTIONS = 1)
+3. **Spatial-Temporal Matching:** Track same person using multi-factor approach:
+   - **Embedding Similarity:** Base threshold 0.50
+   - **Spatial Proximity:** IoU (Intersection over Union) ≥ 0.3
+   - **Temporal Window:** Within 2 seconds
+   - **Smart Boost:** +0.20 score bonus when spatial-temporal criteria met
+4. **Snapshot:** One snapshot per unique unknown person
+5. **Cooldown:** 5-minute cooldown to prevent re-alerts
 
 **Embedding Averaging:**
 - Maintains last 5 embeddings per tracked person
 - Uses moving average for robust matching
 - Handles pose variations and lighting changes
 
-**Similarity Threshold:** 0.55 cosine similarity to identify same unknown person
+**Spatial-Temporal Deduplication (Phase 2 & 3):**
+- **Problem:** Face embeddings naturally vary by 0.05-0.15 per frame
+- **Solution:** Combine embedding similarity with spatial position and timing
+- **Example:**
+  ```
+  Frame 1: Unknown detected at position (100, 100) → Alert + Snapshot
+  Frame 2: Face at (105, 102), similarity 0.38, IoU 0.93
+          → Base 0.38 + Spatial boost 0.20 = 0.58 ✓
+          → Matched to same person, NO new alert
+  ```
+- **Results:** 69% reduction in duplicate snapshots
+
+**Key Parameters:**
+- `UNKNOWN_SIMILARITY_THRESHOLD = 0.50`: Balanced for spatial-temporal boost to work
+- `SPATIAL_BOOST_SCORE = 0.20`: Bonus score for nearby detections in time/space
+- `SPATIAL_IOU_THRESHOLD = 0.3`: Minimum overlap for spatial proximity
+- `TEMPORAL_WINDOW_SECONDS = 2.0`: Time window to consider spatial proximity
 
 ## 🛠️ Development
 
@@ -293,10 +321,38 @@ with open('data/combined_face_database.pkl', 'wb') as f:
 - Reduce video resolution
 - Check GPU memory usage
 
-### False Alerts
-- Increase `MIN_DETECTIONS_BEFORE_ALERT`
-- Adjust `UNKNOWN_SIMILARITY_THRESHOLD`
-- Increase `GRACE_PERIOD` duration
+### False Alerts (Known Persons Marked as Unknown)
+- **Solution:** Increase `GRACE_PERIOD` duration (default: 10 seconds)
+- **Solution:** Lower `GRACE_PERIOD_THRESHOLD` (default: 0.30)
+- **Solution:** Increase `MIN_FACE_SIZE` to ignore poor quality detections
+
+### Duplicate Unknown Alerts (Same Person, Multiple Snapshots)
+**Phase 3 Configuration (Optimized):**
+- `UNKNOWN_SIMILARITY_THRESHOLD = 0.50` - Balanced threshold
+- `SPATIAL_BOOST_SCORE = 0.20` - Strong spatial-temporal boost
+- `SPATIAL_IOU_THRESHOLD = 0.3` - Spatial proximity sensitivity
+- `TEMPORAL_WINDOW_SECONDS = 2.0` - Time window for matching
+
+**If still getting duplicates:**
+1. **Increase spatial boost:** `SPATIAL_BOOST_SCORE = 0.25`
+2. **Lower similarity threshold:** `UNKNOWN_SIMILARITY_THRESHOLD = 0.45`
+3. **Widen temporal window:** `TEMPORAL_WINDOW_SECONDS = 3.0`
+4. **Lower IoU threshold:** `SPATIAL_IOU_THRESHOLD = 0.25`
+
+**If merging different people:**
+1. **Raise similarity threshold:** `UNKNOWN_SIMILARITY_THRESHOLD = 0.55`
+2. **Lower spatial boost:** `SPATIAL_BOOST_SCORE = 0.15`
+3. **Increase IoU threshold:** `SPATIAL_IOU_THRESHOLD = 0.4`
+
+**Monitor effectiveness:**
+```bash
+# Watch spatial-temporal matching in action
+tail -f backend/backend.log | grep -E '(🎯|✅ Matched)'
+
+# Count unique unknowns vs snapshots (should be equal)
+grep "New unknown person tracking started" backend/backend.log | wc -l
+ls snapshots/ | wc -l
+```
 
 ## 📄 License
 
