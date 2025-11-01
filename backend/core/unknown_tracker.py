@@ -238,13 +238,14 @@ class UnknownPersonTracker:
         
         Phase 1 Improvements:
         - Uses moving average of embeddings for better matching
-        - Requires multiple detections before alerting (default: 3)
-        - Lowered similarity threshold from 0.55 to 0.45
+        - Alert immediately (MIN_DETECTIONS = 1)
+        - Similarity threshold 0.55 for reliable matching
         
-        Phase 2 Improvements:
+        Phase 2 Improvements (Anti-Duplicate):
         - Spatial-temporal proximity tracking using IoU and time window
         - Tracks bounding box history for spatial matching
         - Boosts matching score for nearby detections in time/space
+        - Prevents duplicates even with immediate alerts
         - Reduces false duplicates by 80-90%
         
         Args:
