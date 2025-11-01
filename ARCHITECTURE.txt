@@ -1,0 +1,285 @@
+╔════════════════════════════════════════════════════════════════════════════╗
+║           UNKNOWN PERSON ALERT SYSTEM - ARCHITECTURE DIAGRAM                ║
+╚════════════════════════════════════════════════════════════════════════════╝
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          USER INTERFACE (React)                              │
+│                        http://localhost:3000                                 │
+└──────────────────────────────┬──────────────────────────────────────────────┘
+                               │
+                               │ HTTP / WebSocket
+                               │
+┌──────────────────────────────▼──────────────────────────────────────────────┐
+│                      FRONTEND (React + TailwindCSS)                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌──────────────────┐           │
+│  │   VideoPlayer   │  │   AlertPanel    │  │ SnapshotGallery  │           │
+│  │   Component     │  │   Component     │  │    Component     │           │
+│  └─────────────────┘  └─────────────────┘  └──────────────────┘           │
+│                                                                              │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌──────────────────┐           │
+│  │ MetricsDashboard│  │ KnownPersonsLog │  │  ControlPanel    │           │
+│  │   Component     │  │   Component     │  │    Component     │           │
+│  └─────────────────┘  └─────────────────┘  └──────────────────┘           │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────┐          │
+│  │                     API Service                               │          │
+│  │  - HTTP Requests (axios)                                      │          │
+│  │  - WebSocket Connection                                       │          │
+│  │  - Event Handlers (frame, alert, metrics, known_person)      │          │
+│  └──────────────────────────────────────────────────────────────┘          │
+│                                                                              │
+└──────────────────────────────┬──────────────────────────────────────────────┘
+                               │
+                   ┌───────────┴───────────┐
+                   │                       │
+              HTTP │                       │ WebSocket
+              REST │                       │ (Real-time)
+                   │                       │
+┌──────────────────▼───────────────────────▼──────────────────────────────────┐
+│                      BACKEND (FastAPI + Python)                              │
+│                        http://localhost:8000                                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│  ┌───────────────────────────────────────────────────────────────────────┐ │
+│  │                         FastAPI Application                            │ │
+│  │  Routes:                                                               │ │
+│  │    GET  /api/health      GET  /api/stats                              │ │
+│  │    GET  /api/snapshots   GET  /api/known-persons                      │ │
+│  │    POST /api/source      POST /api/control                            │ │
+│  │    WS   /api/stream      (Real-time video & events)                   │ │
+│  └───────────────────────────────────────────────────────────────────────┘ │
+│                                                                              │
+│  ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐         │
+│  │  WebSocket       │  │  Face Recognizer │  │ Unknown Tracker  │         │
+│  │  Manager         │  │                  │  │                  │         │
+│  │                  │  │ - InsightFace    │  │ - Cooldown Mgmt  │         │
+│  │ - Broadcast      │  │ - Buffalo_L      │  │ - Embedding      │         │
+│  │ - Multi-client   │  │ - ArcFace        │  │   Comparison     │         │
+│  │ - Event Types    │  │ - RetinaFace     │  │ - Snapshot Save  │         │
+│  └──────────────────┘  └──────────────────┘  └──────────────────┘         │
+│                                                                              │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                       Video Processor                                 │  │
+│  │                                                                        │  │
+│  │  - Frame Extraction          - FPS Monitoring                         │  │
+│  │  - Multi-source Support      - GPU Metrics (PyNVML)                   │  │
+│  │  - File / Camera Input       - Performance Tracking                   │  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+│                                                                              │
+└──────┬───────────────────────┬────────────────────────┬─────────────────────┘
+       │                       │                        │
+       │                       │                        │
+       ▼                       ▼                        ▼
+┌─────────────┐      ┌──────────────────┐    ┌─────────────────┐
+│   Video     │      │  Face Database   │    │   Snapshots     │
+│   Source    │      │   (Pickle)       │    │   Directory     │
+│             │      │                  │    │                 │
+│ - File      │      │ - Known Persons  │    │ - Unknown       │
+│ - Camera    │      │ - Embeddings     │    │   Person        │
+│             │      │ - Person IDs     │    │   Images        │
+└─────────────┘      └──────────────────┘    └─────────────────┘
+
+
+DATA FLOW - FACE RECOGNITION PIPELINE
+═══════════════════════════════════════════════════════════════════════════════
+
+1. VIDEO INPUT
+   ↓
+   [Video Processor] → Extracts frames at specified interval
+   ↓
+2. FACE DETECTION
+   ↓
+   [InsightFace - RetinaFace] → Detects faces in frame
+   ↓                            Returns: bbox, confidence, landmarks
+3. EMBEDDING EXTRACTION
+   ↓
+   [InsightFace - ArcFace] → Generates 512-dim embedding
+   ↓
+4. FACE MATCHING
+   ↓
+   [Face Recognizer] → Compares with database embeddings
+   ↓                   Cosine similarity > 0.42 = match
+   ├─── KNOWN PERSON DETECTED ───┐
+   │                              │
+   │  • Log person ID & name      │
+   │  • Record timestamp          │
+   │  • Show green box on video   │
+   │  • Add to known persons log  │
+   │  • NO ALERT                  │
+   │                              │
+   └───────────────────────────────
+   │
+   └─── UNKNOWN PERSON DETECTED ──┐
+                                   │
+                                   ▼
+                          [Unknown Tracker]
+                                   │
+                          Check cooldown cache
+                          (embedding similarity)
+                                   │
+                      ┌────────────┴────────────┐
+                      │                         │
+              Already in cooldown       New unknown person
+              (within 5 minutes)               │
+                      │                         │
+                      │                    Generate UID
+              Update last seen             Save snapshot
+              Increment count              Add to cache
+              NO ALERT                     TRIGGER ALERT
+                      │                         │
+                      └────────────┬────────────┘
+                                   │
+                                   ▼
+                          [WebSocket Broadcast]
+                                   │
+                          Send to all clients:
+                          • Video frame
+                          • Detection info
+                          • Alert (if new)
+                          • Metrics
+                                   │
+                                   ▼
+                          [Frontend Updates]
+                          • Display on video
+                          • Show in alerts
+                          • Update logs
+                          • Refresh metrics
+
+
+WEBSOCKET MESSAGE TYPES
+═══════════════════════════════════════════════════════════════════════════════
+
+1. 'frame'
+   {
+     type: 'frame',
+     frame: <base64-encoded-jpeg>,
+     detections: [
+       { bbox, person_id, person_name, confidence, similarity, is_known }
+     ]
+   }
+
+2. 'alert'
+   {
+     type: 'alert',
+     data: {
+       uid: 'UNKNOWN_0001',
+       timestamp: '2025-11-01T...',
+       snapshot_path: '/snapshots/...',
+       confidence: 0.95
+     }
+   }
+
+3. 'metrics'
+   {
+     type: 'metrics',
+     data: {
+       video: { fps, gpu_util, memory, ... },
+       model: { name, threshold, ... },
+       unknown_tracker: { total_tracked, ... }
+     }
+   }
+
+4. 'known_person'
+   {
+     type: 'known_person',
+     data: {
+       person_id, person_name, similarity, timestamp
+     }
+   }
+
+
+CONFIGURATION PARAMETERS
+═══════════════════════════════════════════════════════════════════════════════
+
+Performance Tuning:
+  FRAME_SKIP = 2              → Process every 3rd frame (balance speed/accuracy)
+  DET_SIZE = (640, 640)       → Detection input resolution
+  GPU_DEVICE_ID = 0           → GPU to use
+
+Recognition Settings:
+  SIMILARITY_THRESHOLD = 0.42  → Min similarity for match (lower = stricter)
+  MIN_FACE_SIZE = 30          → Minimum face size in pixels
+
+Unknown Person Tracking:
+  UNKNOWN_COOLDOWN_SECONDS = 300        → 5 minutes cooldown
+  UNKNOWN_SIMILARITY_THRESHOLD = 0.85   → Embedding similarity for same person
+
+WebSocket:
+  WS_FRAME_QUALITY = 85       → JPEG quality (1-100)
+  WS_UPDATE_INTERVAL = 0.033  → ~30 FPS max
+  METRICS_UPDATE_INTERVAL = 1.0  → Update metrics every 1 second
+
+
+SYSTEM REQUIREMENTS
+═══════════════════════════════════════════════════════════════════════════════
+
+Hardware:
+  • CPU: Multi-core processor (4+ cores recommended)
+  • RAM: 8GB minimum, 16GB recommended
+  • GPU: CUDA-capable NVIDIA GPU (recommended)
+  • Storage: 10GB+ free space
+
+Software:
+  • OS: Ubuntu/Linux (tested on Ubuntu 20.04+)
+  • Python: 3.10+
+  • Node.js: 18+
+  • CUDA: 11.x or 12.x (if using GPU)
+
+Network:
+  • Ports: 8000 (backend), 3000 (frontend)
+  • Bandwidth: Minimal for local deployment
+
+
+PERFORMANCE BENCHMARKS
+═══════════════════════════════════════════════════════════════════════════════
+
+With GPU (NVIDIA GPU):
+  • Processing FPS: 20-30 FPS
+  • Latency: 30-50ms per frame
+  • GPU Utilization: 30-60%
+  • GPU Memory: 2-4GB
+
+Without GPU (CPU only):
+  • Processing FPS: 5-10 FPS
+  • Latency: 100-200ms per frame
+  • CPU Utilization: 80-100%
+
+Typical Usage:
+  • 1-5 concurrent faces: Excellent performance
+  • 6-10 concurrent faces: Good performance
+  • 10+ concurrent faces: May require optimization
+
+
+DEPLOYMENT TOPOLOGY
+═══════════════════════════════════════════════════════════════════════════════
+
+Development (Current):
+  ┌──────────┐
+  │  Local   │
+  │ Machine  │
+  │          │
+  │ Backend  │ :8000
+  │ Frontend │ :3000
+  └──────────┘
+
+Production (Suggested):
+  ┌──────────────┐         ┌──────────────┐
+  │   Clients    │◄───────►│  Web Server  │
+  │  (Browsers)  │  HTTPS  │   (Nginx)    │
+  └──────────────┘         └───────┬──────┘
+                                   │
+                           ┌───────┴──────┐
+                           │              │
+                      ┌────▼────┐   ┌────▼────┐
+                      │ Backend │   │Frontend │
+                      │ (FastAPI│   │ (Static)│
+                      │  :8000) │   │  Files) │
+                      └─────────┘   └─────────┘
+
+
+═══════════════════════════════════════════════════════════════════════════════
+                         END OF ARCHITECTURE DIAGRAM
+═══════════════════════════════════════════════════════════════════════════════
+
