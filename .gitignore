@@ -67,7 +67,10 @@ snapshots/*.png
 !snapshots/.gitkeep
 
 # Face database (sensitive data)
+# Note: combined_face_database.pkl is included as sample data
+# In production, use private database
 data/*.pkl
+!data/combined_face_database.pkl
 
 # Temporary files
 *.tmp
