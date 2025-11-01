@@ -41,7 +41,8 @@ class UnknownPersonTracker:
                  min_detections_before_alert: int = 3,
                  max_embedding_history: int = 5,
                  spatial_iou_threshold: float = 0.3,
-                 temporal_window_seconds: float = 2.0):
+                 temporal_window_seconds: float = 2.0,
+                 spatial_boost_score: float = 0.20):
         """
         Initialize unknown person tracker
         
@@ -53,6 +54,7 @@ class UnknownPersonTracker:
             max_embedding_history: Maximum embeddings to keep for averaging
             spatial_iou_threshold: Minimum IoU for spatial proximity matching (Phase 2)
             temporal_window_seconds: Time window for spatial-temporal matching (Phase 2)
+            spatial_boost_score: Score boost for spatial-temporal matches
         """
         self.cooldown_seconds = cooldown_seconds
         self.similarity_threshold = similarity_threshold
@@ -61,6 +63,7 @@ class UnknownPersonTracker:
         self.max_embedding_history = max_embedding_history
         self.spatial_iou_threshold = spatial_iou_threshold
         self.temporal_window_seconds = temporal_window_seconds
+        self.spatial_boost_score = spatial_boost_score
         
         self.unknown_persons: Dict[str, UnknownPerson] = {}
         self.next_uid = 1
@@ -68,7 +71,8 @@ class UnknownPersonTracker:
         os.makedirs(snapshot_dir, exist_ok=True)
         logger.info(f"UnknownPersonTracker initialized (cooldown={cooldown_seconds}s, "
                    f"similarity={similarity_threshold}, min_detections={min_detections_before_alert}, "
-                   f"spatial_iou={spatial_iou_threshold}, temporal_window={temporal_window_seconds}s)")
+                   f"spatial_iou={spatial_iou_threshold}, temporal_window={temporal_window_seconds}s, "
+                   f"spatial_boost={spatial_boost_score})")
     
     def _generate_uid(self) -> str:
         """Generate unique identifier for unknown person"""
@@ -169,9 +173,9 @@ class UnknownPersonTracker:
                     
                     # If spatially close, boost the score
                     if iou >= self.spatial_iou_threshold:
-                        spatial_temporal_boost = 0.15  # Significant boost for nearby detections
-                        logger.debug(f"{uid}: IoU={iou:.3f}, time_diff={time_diff:.2f}s, "
-                                   f"applying spatial-temporal boost")
+                        spatial_temporal_boost = self.spatial_boost_score  # Configurable boost
+                        logger.info(f"🎯 {uid}: IoU={iou:.3f}, time_diff={time_diff:.2f}s, "
+                                   f"applying spatial-temporal boost (+{spatial_temporal_boost})")
             
             # Combined score: embedding similarity + spatial-temporal boost
             combined_score = similarity + spatial_temporal_boost
@@ -183,8 +187,9 @@ class UnknownPersonTracker:
                 best_match_uid = uid
         
         if best_match_uid:
-            logger.debug(f"Matched to {best_match_uid} with similarity={best_similarity:.3f}, "
-                        f"score={best_score:.3f}")
+            boost_applied = best_score - best_similarity
+            logger.info(f"✅ Matched to {best_match_uid} with similarity={best_similarity:.3f}, "
+                        f"boost={boost_applied:.3f}, final_score={best_score:.3f}")
         
         return best_match_uid
     
