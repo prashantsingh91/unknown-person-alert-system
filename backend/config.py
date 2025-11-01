@@ -19,8 +19,12 @@ DET_SIZE = (640, 640)  # Detection input size
 
 # Unknown Person Tracking
 UNKNOWN_COOLDOWN_SECONDS = 300  # 5 minutes cooldown for same unknown person
-UNKNOWN_SIMILARITY_THRESHOLD = 0.55  # More aggressive similarity = same unknown person (Phase 1 improvement)
+UNKNOWN_SIMILARITY_THRESHOLD = 0.45  # Phase 1: Lowered from 0.55 to 0.45 for better duplicate detection
 MIN_DETECTIONS_BEFORE_ALERT = 3  # Require 3 detections before alerting (wait 2-3 seconds)
+
+# Spatial-Temporal Tracking (Phase 2)
+SPATIAL_IOU_THRESHOLD = 0.3  # Minimum IoU for spatial proximity matching
+TEMPORAL_WINDOW_SECONDS = 2.0  # Time window for spatial-temporal matching
 
 # Known Person Tracking (prevent spam)
 KNOWN_PERSON_COOLDOWN_SECONDS = 30  # Don't show same known person again for 30 seconds

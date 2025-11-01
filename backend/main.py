@@ -99,7 +99,9 @@ async def startup_event():
             similarity_threshold=config.UNKNOWN_SIMILARITY_THRESHOLD,
             snapshot_dir=config.SNAPSHOT_DIR,
             min_detections_before_alert=config.MIN_DETECTIONS_BEFORE_ALERT,
-            max_embedding_history=5  # Keep last 5 embeddings for moving average
+            max_embedding_history=5,  # Keep last 5 embeddings for moving average
+            spatial_iou_threshold=config.SPATIAL_IOU_THRESHOLD,  # Phase 2: Spatial proximity
+            temporal_window_seconds=config.TEMPORAL_WINDOW_SECONDS  # Phase 2: Temporal window
         )
         
         # Initialize known person tracker
