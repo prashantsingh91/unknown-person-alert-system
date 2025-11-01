@@ -192,22 +192,159 @@ DET_SIZE = (640, 640)                # Face detection input size
 - Handles pose variations and lighting changes
 
 **Spatial-Temporal Deduplication (Phase 2 & 3):**
-- **Problem:** Face embeddings naturally vary by 0.05-0.15 per frame
-- **Solution:** Combine embedding similarity with spatial position and timing
-- **Example:**
-  ```
-  Frame 1: Unknown detected at position (100, 100) → Alert + Snapshot
-  Frame 2: Face at (105, 102), similarity 0.38, IoU 0.93
-          → Base 0.38 + Spatial boost 0.20 = 0.58 ✓
-          → Matched to same person, NO new alert
-  ```
-- **Results:** 69% reduction in duplicate snapshots
+
+**Problem Solved:**
+Face embeddings from the same person naturally vary by 0.05-0.15 across consecutive frames due to:
+- Slight head movements and pose changes
+- Lighting variations
+- Expression changes
+- InsightFace embedding extraction variance
+
+Pure embedding-based matching would create duplicate unknown IDs for the same person.
+
+**Algorithm Overview:**
+
+The spatial-temporal algorithm combines three factors to identify if a detection matches an existing tracked person:
+
+```
+1. Embedding Similarity (S): Cosine similarity between face embeddings
+2. Spatial Proximity (IoU): Intersection over Union of bounding boxes
+3. Temporal Proximity (T): Time difference between detections
+
+Final Score = S + Boost (if spatial-temporal criteria met)
+Match if: Final Score >= UNKNOWN_SIMILARITY_THRESHOLD (0.50)
+```
+
+**Detailed Algorithm Steps:**
+
+**Step 1: Embedding Similarity Calculation**
+```python
+# Cosine similarity between current face and tracked person
+similarity = dot(embedding_current, embedding_tracked) / 
+             (norm(embedding_current) * norm(embedding_tracked))
+# Range: [-1.0, 1.0], typically [0.3, 0.95] for same person
+```
+
+**Step 2: Spatial Proximity (IoU Calculation)**
+```python
+# Intersection over Union for bounding boxes
+# bbox format: [x1, y1, x2, y2]
+
+def compute_iou(bbox1, bbox2):
+    # Find intersection rectangle
+    x1_inter = max(bbox1[0], bbox2[0])
+    y1_inter = max(bbox1[1], bbox2[1])
+    x2_inter = min(bbox1[2], bbox2[2])
+    y2_inter = min(bbox1[3], bbox2[3])
+    
+    # Calculate areas
+    intersection = (x2_inter - x1_inter) * (y2_inter - y1_inter)
+    area1 = (bbox1[2] - bbox1[0]) * (bbox1[3] - bbox1[1])
+    area2 = (bbox2[2] - bbox2[0]) * (bbox2[3] - bbox2[1])
+    union = area1 + area2 - intersection
+    
+    return intersection / union
+
+# Range: [0.0, 1.0]
+# 0.0 = no overlap, 1.0 = perfect overlap
+```
+
+**Step 3: Temporal Proximity Check**
+```python
+time_diff = current_time - person.last_seen
+# Check if within temporal window (2 seconds by default)
+```
+
+**Step 4: Spatial-Temporal Boost Application**
+```python
+spatial_temporal_boost = 0.0
+
+if person.bbox is not None:
+    time_diff = current_time - person.last_seen
+    
+    # Only apply boost if within temporal window
+    if time_diff <= TEMPORAL_WINDOW_SECONDS (2.0s):
+        iou = compute_iou(bbox_current, person.bbox)
+        
+        # Only apply boost if spatially close
+        if iou >= SPATIAL_IOU_THRESHOLD (0.3):
+            spatial_temporal_boost = SPATIAL_BOOST_SCORE (0.20)
+
+final_score = similarity + spatial_temporal_boost
+```
+
+**Step 5: Matching Decision**
+```python
+if final_score >= UNKNOWN_SIMILARITY_THRESHOLD (0.50):
+    # Match found! Same person
+    # Update tracking, NO new alert
+else:
+    # No match, create new unknown person
+    # Trigger alert + snapshot
+```
+
+**Visual Example:**
+
+```
+Frame t=0.00s:
+┌─────────────────────────────────┐
+│  Person appears                 │
+│  ┌──────┐                       │
+│  │Face 1│  (200, 150, 280, 230) │
+│  └──────┘                       │
+│  Similarity: N/A (new)          │
+│  → Alert + Snapshot             │
+│  → Track as UNKNOWN_0001        │
+└─────────────────────────────────┘
+
+Frame t=0.10s:
+┌─────────────────────────────────┐
+│  Person moved slightly          │
+│     ┌──────┐                    │
+│     │Face 1│ (205, 152, 285, 232)│
+│     └──────┘                    │
+│  Similarity: 0.38 (low!)        │
+│  IoU: 0.93 (high overlap!)      │
+│  Time: 0.10s (within 2s)        │
+│  → Boost: +0.20                 │
+│  → Final: 0.38 + 0.20 = 0.58 ✓  │
+│  → Matched to UNKNOWN_0001      │
+│  → NO new alert                 │
+└─────────────────────────────────┘
+
+Frame t=3.50s:
+┌─────────────────────────────────┐
+│  Person moved far               │
+│                    ┌──────┐     │
+│                    │Face 1│     │
+│                    └──────┘     │
+│  Similarity: 0.42               │
+│  IoU: 0.05 (low overlap)        │
+│  Time: 3.40s (outside 2s)       │
+│  → Boost: 0.0 (no boost)        │
+│  → Final: 0.42 (< 0.50) ✗       │
+│  → Would create new unknown     │
+│  BUT: Cooldown active (5 min)   │
+└─────────────────────────────────┘
+```
+
+**Why It Works:**
+
+1. **Handles Embedding Variance:** Even if similarity drops to 0.35-0.45, spatial context confirms it's the same person
+2. **Position Continuity:** Same person can't teleport; must be near previous position
+3. **Temporal Locality:** Recent detections more likely to be same person
+4. **Adaptive Threshold:** Effectively lowers threshold to 0.30 (0.50 - 0.20) for nearby detections
+
+**Performance Impact:**
+- **Before Phase 3:** 13 duplicate snapshots, 0 spatial-temporal matches
+- **After Phase 3:** 4-6 snapshots, 130+ spatial-temporal matches
+- **Reduction:** 69% fewer duplicates
 
 **Key Parameters:**
-- `UNKNOWN_SIMILARITY_THRESHOLD = 0.50`: Balanced for spatial-temporal boost to work
-- `SPATIAL_BOOST_SCORE = 0.20`: Bonus score for nearby detections in time/space
-- `SPATIAL_IOU_THRESHOLD = 0.3`: Minimum overlap for spatial proximity
-- `TEMPORAL_WINDOW_SECONDS = 2.0`: Time window to consider spatial proximity
+- `UNKNOWN_SIMILARITY_THRESHOLD = 0.50`: Base threshold (balanced for boost)
+- `SPATIAL_BOOST_SCORE = 0.20`: Bonus score for nearby detections
+- `SPATIAL_IOU_THRESHOLD = 0.3`: Minimum overlap (30% box overlap)
+- `TEMPORAL_WINDOW_SECONDS = 2.0`: Time window for spatial matching
 
 ## 🛠️ Development
 
