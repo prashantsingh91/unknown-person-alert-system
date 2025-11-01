@@ -164,6 +164,9 @@ async def process_video_stream():
     last_metrics_time = time.time()
     frame_number = 0
     
+    # Cache for last detected faces (prevents flickering with frame skip)
+    cached_results = []
+    
     try:
         while is_processing:
             # Check if we have any connected clients
@@ -179,13 +182,14 @@ async def process_video_stream():
             
             frame_number += 1
             
-            # Process frame if needed (skip frames for performance)
+            # Process frame if needed (skip frames for performance, but draw boxes on all frames)
             detections_list = []
             if video_processor.should_process_frame():
                 process_start = time.time()
                 
-                # Recognize faces
+                # Recognize faces and update cache
                 results = face_recognizer.process_frame(frame)
+                cached_results = results  # Update cache for drawing on next frames
                 
                 for result in results:
                     x1, y1, x2, y2 = result.bbox
@@ -225,24 +229,6 @@ async def process_video_stream():
                                 'similarity': float(result.similarity),
                                 'timestamp': datetime.now().isoformat()
                             })
-                        
-                        # Draw green box for known person
-                        cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
-                        
-                        # Calculate face size
-                        face_width = int(x2 - x1)
-                        face_height = int(y2 - y1)
-                        face_area = face_width * face_height
-                        
-                        # Display name and similarity
-                        label = f"{result.person_name} ({result.similarity:.2f})"
-                        cv2.putText(frame, label, (int(x1), int(y1)-10),
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
-                        
-                        # Display face size below bbox
-                        size_label = f"Size: {face_width}x{face_height} ({face_area}px)"
-                        cv2.putText(frame, size_label, (int(x1), int(y2)+20),
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
                     else:
                         # Unknown person detected
                         should_alert, uid, snapshot_path = unknown_tracker.check_unknown_person(
@@ -270,23 +256,6 @@ async def process_video_stream():
                             
                             await ws_manager.broadcast_alert(alert_data)
                             logger.info(f"ALERT: Unknown person {uid} detected!")
-                        
-                        # Draw red box for unknown person
-                        cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 2)
-                        
-                        # Calculate face size
-                        face_width = int(x2 - x1)
-                        face_height = int(y2 - y1)
-                        face_area = face_width * face_height
-                        
-                        # Display "UNKNOWN" label
-                        cv2.putText(frame, "UNKNOWN", (int(x1), int(y1)-10),
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
-                        
-                        # Display face size below bbox
-                        size_label = f"Size: {face_width}x{face_height} ({face_area}px)"
-                        cv2.putText(frame, size_label, (int(x1), int(y2)+20),
-                                  cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
                 
                 # Mark frame as processed
                 process_time = time.time() - process_start
@@ -296,6 +265,44 @@ async def process_video_stream():
                 if frame_number % 100 == 0:
                     unknown_tracker.cleanup_expired()
                     known_tracker.cleanup_expired()
+            
+            # Draw bounding boxes on EVERY frame (from cache) to prevent flickering
+            for result in cached_results:
+                x1, y1, x2, y2 = result.bbox
+                
+                # Filter out small faces (same as above)
+                face_width = int(x2 - x1)
+                face_height = int(y2 - y1)
+                if face_width < 60 or face_height < 60:
+                    continue
+                
+                face_area = face_width * face_height
+                
+                if result.is_known:
+                    # Draw green box for known person
+                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+                    
+                    # Display name and similarity
+                    label = f"{result.person_name} ({result.similarity:.2f})"
+                    cv2.putText(frame, label, (int(x1), int(y1)-10),
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+                    
+                    # Display face size below bbox
+                    size_label = f"Size: {face_width}x{face_height} ({face_area}px)"
+                    cv2.putText(frame, size_label, (int(x1), int(y2)+20),
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+                else:
+                    # Draw red box for unknown person
+                    cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 2)
+                    
+                    # Display "UNKNOWN" label
+                    cv2.putText(frame, "UNKNOWN", (int(x1), int(y1)-10),
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
+                    
+                    # Display face size below bbox
+                    size_label = f"Size: {face_width}x{face_height} ({face_area}px)"
+                    cv2.putText(frame, size_label, (int(x1), int(y2)+20),
+                              cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
             
             # Encode frame as JPEG
             ret, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, config.WS_FRAME_QUALITY])
