@@ -166,6 +166,7 @@ async def process_video_stream():
     
     # Cache for last detected faces (prevents flickering with frame skip)
     cached_results = []
+    cached_detections = []  # Cache for detection info panel
     
     try:
         while is_processing:
@@ -183,13 +184,15 @@ async def process_video_stream():
             frame_number += 1
             
             # Process frame if needed (skip frames for performance, but draw boxes on all frames)
-            detections_list = []
             if video_processor.should_process_frame():
                 process_start = time.time()
                 
                 # Recognize faces and update cache
                 results = face_recognizer.process_frame(frame)
                 cached_results = results  # Update cache for drawing on next frames
+                
+                # Build detections list for this frame
+                detections_list = []
                 
                 for result in results:
                     x1, y1, x2, y2 = result.bbox
@@ -257,6 +260,9 @@ async def process_video_stream():
                             await ws_manager.broadcast_alert(alert_data)
                             logger.info(f"ALERT: Unknown person {uid} detected!")
                 
+                # Update cached detections for next frames
+                cached_detections = detections_list
+                
                 # Mark frame as processed
                 process_time = time.time() - process_start
                 video_processor.mark_processed(process_time)
@@ -304,11 +310,11 @@ async def process_video_stream():
                     cv2.putText(frame, size_label, (int(x1), int(y2)+20),
                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
             
-            # Encode frame as JPEG
+            # Encode frame as JPEG and send with cached detections
             ret, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, config.WS_FRAME_QUALITY])
             if ret:
                 frame_bytes = jpeg.tobytes()
-                await ws_manager.broadcast_frame(frame_bytes, detections_list)
+                await ws_manager.broadcast_frame(frame_bytes, cached_detections)  # Send cached detections
             
             # Send metrics update periodically
             current_time = time.time()
