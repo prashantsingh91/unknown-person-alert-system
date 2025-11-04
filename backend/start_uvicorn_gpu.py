@@ -13,14 +13,15 @@ def setup_cuda_environment():
     """Set up LD_LIBRARY_PATH to include all NVIDIA CUDA libraries"""
     site_packages = site.getsitepackages()[0]
     
-    # Find all nvidia library directories
+    # Find all nvidia library directories (recursively search nvidia* for lib dirs)
     nvidia_lib_dirs = []
-    nvidia_path = Path(site_packages)
+    site_packages_path = Path(site_packages)
     
-    for nvidia_dir in nvidia_path.glob("nvidia*"):
-        lib_dir = nvidia_dir / "lib"
-        if lib_dir.exists():
-            nvidia_lib_dirs.append(str(lib_dir))
+    # Search all nvidia* directories recursively for lib folders
+    for nvidia_dir in site_packages_path.glob("nvidia*"):
+        for lib_dir in nvidia_dir.rglob("lib"):
+            if lib_dir.is_dir():
+                nvidia_lib_dirs.append(str(lib_dir))
     
     if nvidia_lib_dirs:
         current_ld_path = os.environ.get('LD_LIBRARY_PATH', '')
@@ -62,6 +63,6 @@ if __name__ == "__main__":
         "--port", "8001"
     ]
     
-    # Execute uvicorn (this replaces current process)
-    os.execvp(cmd[0], cmd)
+    # Run uvicorn as a subprocess (inherits environment variables)
+    subprocess.run(cmd)
 

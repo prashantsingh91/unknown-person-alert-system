@@ -8,24 +8,67 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(BASE_DIR)
 AIIMS_ROOT = os.path.dirname(PROJECT_ROOT)
 
-FACE_DATABASE_PATH = os.path.join(AIIMS_ROOT, "data", "combined_face_database.pkl")
+FACE_DATABASE_PATH = os.path.join(AIIMS_ROOT, "data", "face_database_buffalo_s.pkl")
 SNAPSHOT_DIR = os.path.join(PROJECT_ROOT, "snapshots")
 DEFAULT_VIDEO_PATH = os.path.join(AIIMS_ROOT, "recorded_videos", "extracted_2min_to_4min_trimmed.mp4")
 
-# Face Recognition Settings
-SIMILARITY_THRESHOLD = 0.42  # Cosine similarity threshold for face matching
-MIN_FACE_SIZE = 30  # Minimum face size in pixels
-DET_SIZE = (480, 480)  # Detection input size (Phase 1 optimization: 640→480 for +20-30% FPS)
+# Model selection (allows quick switching between buffalo_s and buffalo_l)
+# Override with env var FACE_MODEL=buffalo_l to revert to previous model profile
+FACE_MODEL_NAME = os.getenv("FACE_MODEL", "buffalo_s").strip()
+
+# Base defaults (will be overridden per model profile below)
+SIMILARITY_THRESHOLD = 0.42
+UNKNOWN_SIMILARITY_THRESHOLD = 0.50
+TEMPORAL_WINDOW_SECONDS = 3.0
+SPATIAL_BOOST_SCORE = 0.20
+MIN_FACE_SIZE = 60
+DET_SIZE = (640, 640)
+DETECTION_CONFIDENCE_THRESHOLD = 0.60  # Filter low-confidence detections from detector
+
+# Known person recognition tuning (new hysteresis + centroid features)
+ENTER_THRESHOLD = SIMILARITY_THRESHOLD  # Default: same as single threshold
+STAY_THRESHOLD = SIMILARITY_THRESHOLD   # Default: same as single threshold
+KNOWN_EMBEDDING_HISTORY = 1            # Default: no centroid (single embedding)
+USE_HYSTERESIS = False                 # Default: single threshold mode
+
+# Apply model-specific tuning
+if FACE_MODEL_NAME == "buffalo_s":
+    # buffalo_s is faster but less precise -> tighten thresholds and filters
+    SIMILARITY_THRESHOLD = 0.50
+    UNKNOWN_SIMILARITY_THRESHOLD = 0.50
+    TEMPORAL_WINDOW_SECONDS = 4.0
+    SPATIAL_BOOST_SCORE = 0.15
+    MIN_FACE_SIZE = 70
+    DET_SIZE = (480, 480)
+    DETECTION_CONFIDENCE_THRESHOLD = 0.70
+
+    # NEW: Hysteresis for known person continuity
+    ENTER_THRESHOLD = 0.55  # Stricter threshold for initial recognition
+    STAY_THRESHOLD = 0.45   # More lenient threshold to maintain recognition
+    KNOWN_EMBEDDING_HISTORY = 3  # Keep last 3 embeddings for centroid smoothing
+    USE_HYSTERESIS = True   # Enable hysteresis logic
+else:
+    # buffalo_l (previous model) defaults - keep original single threshold behavior
+    SIMILARITY_THRESHOLD = 0.42
+    UNKNOWN_SIMILARITY_THRESHOLD = 0.50
+    TEMPORAL_WINDOW_SECONDS = 3.0
+    SPATIAL_BOOST_SCORE = 0.20
+    MIN_FACE_SIZE = 60
+    DET_SIZE = (640, 640)
+    DETECTION_CONFIDENCE_THRESHOLD = 0.60
+
+    # Keep single threshold behavior for buffalo_l
+    ENTER_THRESHOLD = SIMILARITY_THRESHOLD
+    STAY_THRESHOLD = SIMILARITY_THRESHOLD
+    KNOWN_EMBEDDING_HISTORY = 1  # Single embedding (no centroid)
+    USE_HYSTERESIS = False  # Disable hysteresis
 
 # Unknown Person Tracking
 UNKNOWN_COOLDOWN_SECONDS = 300  # 5 minutes cooldown for same unknown person
-UNKNOWN_SIMILARITY_THRESHOLD = 0.50  # Optimal: Balanced threshold for spatial-temporal to work
 MIN_DETECTIONS_BEFORE_ALERT = 1  # Alert immediately (Phase 2 spatial-temporal prevents duplicates)
 
 # Spatial-Temporal Tracking (Phase 2) - FIXED for actual deduplication
 SPATIAL_IOU_THRESHOLD = 0.3  # Minimum IoU for spatial proximity matching
-TEMPORAL_WINDOW_SECONDS = 3.0  # Time window for spatial-temporal matching (Phase 1: 2.0→3.0 for frame skip)
-SPATIAL_BOOST_SCORE = 0.20  # Boost applied when spatial-temporal criteria met (increased from 0.15)
 
 # Known Person Tracking (prevent spam)
 KNOWN_PERSON_COOLDOWN_SECONDS = 30  # Don't show same known person again for 30 seconds
@@ -34,11 +77,10 @@ KNOWN_PERSON_COOLDOWN_SECONDS = 30  # Don't show same known person again for 30 
 GPU_DEVICE_ID = 0
 FRAME_SKIP = 1  # Phase 1 optimization: Process every 2nd frame for 2x throughput (0=all, 1=every 2nd, 2=every 3rd)
 MAX_FACES_PER_FRAME = 10
-MIN_FACE_SIZE = 30  # Minimum face size in pixels for detection
 
 # WebSocket Settings
 WS_FRAME_QUALITY = 85  # JPEG quality for streaming
-WS_UPDATE_INTERVAL = 0.033  # ~30 FPS max
+WS_UPDATE_INTERVAL = 0.020 # ~30 FPS max
 
 # Metrics Settings
 METRICS_UPDATE_INTERVAL = 1.0  # Update GPU/FPS metrics every second

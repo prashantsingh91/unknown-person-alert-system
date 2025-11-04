@@ -89,7 +89,12 @@ async def startup_event():
             similarity_threshold=config.SIMILARITY_THRESHOLD,
             gpu_id=config.GPU_DEVICE_ID,
             det_size=config.DET_SIZE,
-            grace_period=10.0  # 10 second grace period for temporary occlusions
+            grace_period=10.0,  # 10 second grace period for temporary occlusions
+            model_name=config.FACE_MODEL_NAME,
+            enter_threshold=config.ENTER_THRESHOLD,
+            stay_threshold=config.STAY_THRESHOLD,
+            known_embedding_history=config.KNOWN_EMBEDDING_HISTORY,
+            use_hysteresis=config.USE_HYSTERESIS
         )
         
         # Initialize unknown tracker
@@ -197,11 +202,15 @@ async def process_video_stream():
                 for result in results:
                     x1, y1, x2, y2 = result.bbox
                     
-                    # Filter out small faces (minimum 60x60 pixels)
+                    # Filter out small faces and low-confidence detections
                     face_width = int(x2 - x1)
                     face_height = int(y2 - y1)
-                    if face_width < 60 or face_height < 60:
+                    if face_width < config.MIN_FACE_SIZE or face_height < config.MIN_FACE_SIZE:
                         logger.debug(f"Skipping small face: {face_width}x{face_height}px")
+                        continue
+                    
+                    if float(result.confidence) < float(config.DETECTION_CONFIDENCE_THRESHOLD):
+                        logger.debug(f"Skipping low-confidence detection: {result.confidence:.2f}")
                         continue
                     
                     if result.is_known:
@@ -279,7 +288,7 @@ async def process_video_stream():
                 # Filter out small faces (same as above)
                 face_width = int(x2 - x1)
                 face_height = int(y2 - y1)
-                if face_width < 60 or face_height < 60:
+                if face_width < config.MIN_FACE_SIZE or face_height < config.MIN_FACE_SIZE:
                     continue
                 
                 face_area = face_width * face_height
