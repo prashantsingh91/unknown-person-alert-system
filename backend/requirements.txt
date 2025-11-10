@@ -1,13 +1,25 @@
 # FastAPI and Web Server
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
-websockets==12.0
 python-multipart==0.0.6
+aiofiles==23.2.1
+
+# WebSocket Support
+websockets==12.0
+websocket-client==1.8.0
+simple-websocket==1.1.0
+trio-websocket==0.12.2
+
+# Data Validation and Serialization
+pydantic==2.10.6
+pydantic-settings==2.10.1
+pydantic_core==2.27.2
 
 # Face Recognition and Computer Vision
 insightface==0.7.3
 onnxruntime-gpu==1.16.3
 opencv-python==4.8.1.78
+opencv-python-headless==4.11.0.86
 numpy==1.26.4
 pillow==10.1.0
 
@@ -15,6 +27,7 @@ pillow==10.1.0
 pynvml==11.5.0
 
 # NVIDIA CUDA Libraries (for GPU acceleration)
+# These are required for onnxruntime-gpu to work properly
 nvidia-cublas-cu11==11.10.3.66
 nvidia-cuda-cupti-cu11==11.7.101
 nvidia-cuda-nvrtc-cu11==11.7.99
@@ -27,5 +40,10 @@ nvidia-cusparse-cu11==11.7.4.91
 nvidia-nccl-cu11==2.14.3
 nvidia-nvtx-cu11==11.7.91
 
-# Note: For CPU-only installation, replace onnxruntime-gpu with onnxruntime
-# and remove all nvidia-* packages
+# Optional: OpenTelemetry (for FastAPI instrumentation)
+opentelemetry-instrumentation-fastapi==0.58b0
+
+# Note: For CPU-only installation:
+# 1. Replace onnxruntime-gpu with: onnxruntime==1.16.3
+# 2. Remove all nvidia-* packages
+# 3. Remove pynvml if GPU monitoring is not needed
