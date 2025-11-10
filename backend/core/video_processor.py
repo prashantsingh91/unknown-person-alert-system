@@ -136,8 +136,10 @@ class VideoProcessor:
         if not ret:
             # End of video or error
             if self.source_type == VideoSource.FILE:
-                logger.info("End of video reached")
+                logger.info("End of video reached (will be reset to True when seek(0) is called)")
                 # Don't loop automatically - return False to signal end
+                # Note: is_playing is set to False here, but will be reset to True
+                # when seek(0) is called in control_playback (play action)
                 self.is_playing = False
                 return False, None
             else:
@@ -250,8 +252,13 @@ class VideoProcessor:
     
     def resume(self):
         """Resume video playback"""
+        if not self.cap:
+            logger.warning("Cannot resume: video source not opened")
+            return
+        
         self.is_paused = False
-        logger.info("Video resumed")
+        self.is_playing = True  # Ensure video is marked as playing
+        logger.info(f"Video resumed (is_playing={self.is_playing}, is_paused={self.is_paused})")
     
     def toggle_pause(self):
         """Toggle pause state"""
@@ -266,7 +273,10 @@ class VideoProcessor:
         try:
             self.cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
             self.frame_count = frame_number
-            logger.info(f"Seeked to frame {frame_number}")
+            # Ensure video is marked as playing after seek (important for restarting after video ends)
+            self.is_playing = True
+            self.is_paused = False
+            logger.info(f"Seeked to frame {frame_number}, is_playing set to True")
             return True
         except Exception as e:
             logger.error(f"Error seeking: {e}")

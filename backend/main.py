@@ -880,9 +880,21 @@ async def control_playback(request: ControlRequest, session_id: str = Depends(re
         
         # Reset video to beginning
         if video_processor.source_type.value == "file":
-            video_processor.seek(0)
+            seek_success = video_processor.seek(0)
+            if not seek_success:
+                logger.error("Failed to seek to beginning of video")
+                raise HTTPException(status_code=500, detail="Failed to reset video")
+            # seek() already sets is_playing = True, but ensure it's set
+            if not video_processor.is_playing:
+                logger.warning("Video not marked as playing after seek, fixing...")
+                video_processor.is_playing = True
         
         video_processor.resume()
+        
+        # Verify video state before starting processing
+        if not video_processor.is_playing:
+            logger.error("Video is not marked as playing after resume, cannot start processing")
+            raise HTTPException(status_code=500, detail="Video not ready for playback")
         
         # Start processing if not already running
         if not is_processing and processing_task is None:
@@ -892,6 +904,8 @@ async def control_playback(request: ControlRequest, session_id: str = Depends(re
             # Restart if previous task completed
             logger.info("🔄 Restarting processing task")
             processing_task = asyncio.create_task(process_frames_task())
+        else:
+            logger.info("✅ Processing task already running")
     elif request.action == "stop":
         # Stop processing completely
         logger.info("🛑 Stopping processing from stop button")
