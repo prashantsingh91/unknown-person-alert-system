@@ -71,6 +71,12 @@ class KnownPersonTracker:
             del self.last_seen[person_id]
             logger.debug(f"Removed expired known person: {person_id}")
     
+    def reset(self):
+        """Reset tracker - clear all tracked known persons"""
+        logger.info("🔄 Resetting known person tracker - clearing all tracked persons")
+        self.last_seen.clear()
+        logger.info("✅ Known person tracker reset complete")
+    
     def get_stats(self) -> Dict:
         """Get tracker statistics"""
         return {

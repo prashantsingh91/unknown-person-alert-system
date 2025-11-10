@@ -137,9 +137,9 @@ class VideoProcessor:
             # End of video or error
             if self.source_type == VideoSource.FILE:
                 logger.info("End of video reached")
-                # Loop video
-                self.cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                ret, frame = self.cap.read()
+                # Don't loop automatically - return False to signal end
+                self.is_playing = False
+                return False, None
             else:
                 logger.error("Failed to read camera frame")
                 return False, None
@@ -161,9 +161,21 @@ class VideoProcessor:
         
         return ret, frame
     
+    def set_dynamic_skip(self, faces_present: bool, target_fps: float = 12.0):
+        """Dynamic frame skip: lower skip when faces present or FPS too low"""
+        if faces_present or self.processing_fps < target_fps:
+            # When faces present or FPS low, process more frames (skip 0-1)
+            self.dynamic_skip = min(1, self.frame_skip)  # Don't skip more than 1 frame
+        else:
+            # When scene empty and FPS good, skip more (3-4 frames)
+            self.dynamic_skip = max(3, self.frame_skip)  # Skip at least 3 frames
+            self.dynamic_skip = min(4, self.dynamic_skip)  # Don't skip more than 4 frames
+
     def should_process_frame(self) -> bool:
-        """Check if current frame should be processed (based on frame skip)"""
-        return self.frame_count % (self.frame_skip + 1) == 0
+        """Check if current frame should be processed (based on dynamic frame skip)"""
+        # Use dynamic_skip if set, otherwise fall back to static frame_skip
+        skip_count = getattr(self, 'dynamic_skip', self.frame_skip)
+        return self.frame_count % (skip_count + 1) == 0
     
     def mark_processed(self, processing_time: float):
         """Mark frame as processed and update metrics"""

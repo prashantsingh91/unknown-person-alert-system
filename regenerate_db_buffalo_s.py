@@ -15,6 +15,97 @@ import logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def create_database_from_image(image_path: str, person_id: str, person_name: str, output_db_path: str):
+    """
+    Create face database entry from a single image using buffalo_s model
+
+    Args:
+        image_path: Path to the face image
+        person_id: ID for the person (e.g., '1234')
+        person_name: Name of the person (e.g., 'prashant')
+        output_db_path: Path to save the database pkl file
+    """
+    logger.info(f"Creating face database with buffalo_s model...")
+    logger.info(f"Image: {image_path}")
+    logger.info(f"Person ID: {person_id}, Name: {person_name}")
+
+    # Initialize buffalo_s model
+    app = FaceAnalysis(
+        name='buffalo_s',
+        providers=['CPUExecutionProvider']  # Use CPU for database creation
+    )
+    app.prepare(ctx_id=-1, det_size=(640, 640))
+
+    # Load or create database
+    database = {}
+    if os.path.exists(output_db_path):
+        try:
+            with open(output_db_path, 'rb') as f:
+                database = pickle.load(f)
+            logger.info(f"Loaded existing database with {len(database)} persons")
+        except Exception as e:
+            logger.warning(f"Could not load existing database: {e}, creating new one")
+
+    # Load and process image
+    if not os.path.exists(image_path):
+        logger.error(f"Image not found at {image_path}")
+        return
+
+    logger.info(f"Loading image from {image_path}...")
+    img = cv2.imread(image_path)
+    if img is None:
+        logger.error(f"Failed to load image from {image_path}")
+        return
+
+    logger.info(f"Image loaded: {img.shape}")
+
+    # Detect faces and extract embeddings
+    logger.info("Detecting faces and extracting embeddings...")
+    faces = app.get(img)
+
+    if not faces:
+        logger.error("No faces detected in the image!")
+        return
+
+    logger.info(f"Detected {len(faces)} face(s) in the image")
+
+    # Extract embeddings from all detected faces
+    embeddings = []
+    for i, face in enumerate(faces):
+        # Get embedding (normalized or raw)
+        if hasattr(face, 'normed_embedding'):
+            embedding = face.normed_embedding
+        elif hasattr(face, 'embedding'):
+            embedding = face.embedding
+            # Normalize if not already normalized
+            embedding = embedding / np.linalg.norm(embedding)
+        else:
+            logger.warning(f"Face {i+1} has no embedding, skipping")
+            continue
+
+        embeddings.append(embedding)
+        logger.info(f"  Face {i+1}: embedding shape = {embedding.shape}")
+
+    if not embeddings:
+        logger.error("No valid embeddings extracted!")
+        return
+
+    # Create or update database entry
+    database[person_id] = {
+        'name': person_name,
+        'embeddings': embeddings
+    }
+
+    logger.info(f"Created database entry for {person_name} (ID: {person_id}) with {len(embeddings)} embedding(s)")
+
+    # Save database
+    os.makedirs(os.path.dirname(output_db_path), exist_ok=True)
+    with open(output_db_path, 'wb') as f:
+        pickle.dump(database, f)
+
+    logger.info(f"✅ Database saved to {output_db_path}")
+    logger.info(f"Database now contains {len(database)} person(s)")
+
 def regenerate_database_with_buffalo_s(original_db_path: str, output_db_path: str):
     """
     Regenerate face database using buffalo_s model
@@ -106,25 +197,22 @@ def test_buffalo_s_embedding_shape():
 
 if __name__ == "__main__":
     # Paths
-    original_db = "data/combined_face_database.pkl"
-    new_db = "data/combined_face_database_buffalo_s.pkl"
+    image_path = "/home/psingh/medgemma/aiims-attendance/face-alert-app/backend/prashant_20251103_143919_879709.jpg"
+    output_db = "data/combined_face_database_buffalo_s.pkl"
+    person_id = "1234"
+    person_name = "prashant"
 
-    logger.info("🔄 Face Database Regeneration Tool")
+    logger.info("🔄 Face Database Creation Tool (buffalo_s)")
     logger.info("=" * 50)
 
     # Test embedding shapes
     test_buffalo_s_embedding_shape()
 
     logger.info("\n" + "=" * 50)
-    logger.info("⚠️  IMPORTANT: Database regeneration requires original face images!")
+    logger.info("Creating database entry from image...")
 
-    # Regenerate database (will show warning about missing images)
-    regenerate_database_with_buffalo_s(original_db, new_db)
+    # Create database entry from image
+    create_database_from_image(image_path, person_id, person_name, output_db)
 
     logger.info("\n" + "=" * 50)
-    logger.info("📋 Next Steps:")
-    logger.info("1. Locate the original face photos used to create the database")
-    logger.info("2. Modify this script to load those photos")
-    logger.info("3. Run the script to generate buffalo_s embeddings")
-    logger.info("4. Replace the database file")
-    logger.info("5. OR: Change back to buffalo_l model in face_recognizer.py")
+    logger.info("✅ Database creation complete!")

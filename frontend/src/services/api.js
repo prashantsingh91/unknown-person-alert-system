@@ -3,8 +3,8 @@
  */
 import axios from 'axios';
 
-const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8001';
-const WS_BASE_URL = process.env.REACT_APP_WS_URL || 'ws://localhost:8001';
+const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const WS_BASE_URL = process.env.REACT_APP_WS_URL || 'ws://localhost:8000';
 
 class APIService {
   constructor() {
@@ -15,6 +15,94 @@ class APIService {
       metrics: [],
       known_person: []
     };
+    this.sessionId = localStorage.getItem('sessionId') || null;
+  }
+
+  /**
+   * Get session ID from localStorage
+   */
+  getSessionId() {
+    return this.sessionId || localStorage.getItem('sessionId');
+  }
+
+  /**
+   * Set session ID
+   */
+  setSessionId(sessionId) {
+    this.sessionId = sessionId;
+    if (sessionId) {
+      localStorage.setItem('sessionId', sessionId);
+    } else {
+      localStorage.removeItem('sessionId');
+    }
+  }
+
+  /**
+   * Get default headers with session ID
+   */
+  getHeaders() {
+    const headers = {};
+    const sessionId = this.getSessionId();
+    if (sessionId) {
+      headers['X-Session-ID'] = sessionId;
+    }
+    return headers;
+  }
+
+  /**
+   * Login
+   */
+  async login(username, password) {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/auth/login`, {
+        username,
+        password
+      });
+      if (response.data.session_id) {
+        this.setSessionId(response.data.session_id);
+      }
+      return response.data;
+    } catch (error) {
+      console.error('Error logging in:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Logout
+   */
+  async logout() {
+    try {
+      const response = await axios.post(`${API_BASE_URL}/api/auth/logout`, {}, {
+        headers: this.getHeaders()
+      });
+      this.setSessionId(null);
+      return response.data;
+    } catch (error) {
+      console.error('Error logging out:', error);
+      // Clear session even if logout fails
+      this.setSessionId(null);
+      throw error;
+    }
+  }
+
+  /**
+   * Check authentication status
+   */
+  async checkAuth() {
+    try {
+      const response = await axios.get(`${API_BASE_URL}/api/auth/check`, {
+        headers: this.getHeaders()
+      });
+      if (!response.data.authenticated) {
+        this.setSessionId(null);
+      }
+      return response.data;
+    } catch (error) {
+      console.error('Error checking auth:', error);
+      this.setSessionId(null);
+      return { authenticated: false };
+    }
   }
 
   /**
@@ -23,7 +111,13 @@ class APIService {
   connectWebSocket() {
     return new Promise((resolve, reject) => {
       try {
-        this.wsConnection = new WebSocket(`${WS_BASE_URL}/api/stream`);
+        const sessionId = this.getSessionId();
+        if (!sessionId) {
+          reject(new Error('Not authenticated'));
+          return;
+        }
+        // Include session_id as query parameter
+        this.wsConnection = new WebSocket(`${WS_BASE_URL}/api/stream?session_id=${sessionId}`);
         
         this.wsConnection.onopen = () => {
           console.log('WebSocket connected');
@@ -32,20 +126,25 @@ class APIService {
         
         this.wsConnection.onmessage = (event) => {
           try {
+            console.log('WebSocket message received:', event.data);
             const data = JSON.parse(event.data);
             const type = data.type;
-            
+            console.log('Parsed message type:', type, data);
+
             if (this.wsCallbacks[type]) {
               this.wsCallbacks[type].forEach(callback => callback(data));
+            } else {
+              console.warn('No callback registered for message type:', type);
             }
           } catch (error) {
-            console.error('Error parsing WebSocket message:', error);
+            console.error('Error parsing WebSocket message:', error, event.data);
           }
         };
         
         this.wsConnection.onerror = (error) => {
           console.error('WebSocket error:', error);
-          reject(error);
+          // Don't reject on error, just log it - connection might still work
+          // reject(error);
         };
         
         this.wsConnection.onclose = () => {
@@ -98,7 +197,9 @@ class APIService {
    */
   async getStats() {
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/stats`);
+      const response = await axios.get(`${API_BASE_URL}/api/stats`, {
+        headers: this.getHeaders()
+      });
       return response.data;
     } catch (error) {
       console.error('Error fetching stats:', error);
@@ -111,7 +212,9 @@ class APIService {
    */
   async getSnapshots() {
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/snapshots`);
+      const response = await axios.get(`${API_BASE_URL}/api/snapshots`, {
+        headers: this.getHeaders()
+      });
       return response.data;
     } catch (error) {
       console.error('Error fetching snapshots:', error);
@@ -124,7 +227,9 @@ class APIService {
    */
   async getKnownPersons() {
     try {
-      const response = await axios.get(`${API_BASE_URL}/api/known-persons`);
+      const response = await axios.get(`${API_BASE_URL}/api/known-persons`, {
+        headers: this.getHeaders()
+      });
       return response.data;
     } catch (error) {
       console.error('Error fetching known persons:', error);
@@ -141,6 +246,8 @@ class APIService {
         source_type: sourceType,
         path: path,
         camera_id: cameraId
+      }, {
+        headers: this.getHeaders()
       });
       return response.data;
     } catch (error) {
@@ -156,6 +263,8 @@ class APIService {
     try {
       const response = await axios.post(`${API_BASE_URL}/api/control`, {
         action: action
+      }, {
+        headers: this.getHeaders()
       });
       return response.data;
     } catch (error) {

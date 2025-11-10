@@ -96,7 +96,42 @@ class ConnectionManager:
         }
         
         await self.broadcast(message)
-    
+
+    async def send_frame_to_client(self, websocket: WebSocket, frame_data: bytes, detections: List[Dict]):
+        """
+        Send video frame with detection results to specific client
+
+        Args:
+            websocket: Target WebSocket connection
+            frame_data: JPEG encoded frame
+            detections: List of detection dictionaries
+        """
+        import base64
+
+        message = {
+            'type': 'frame',
+            'frame': base64.b64encode(frame_data).decode('utf-8'),
+            'detections': detections
+        }
+
+        logger.info(f"📡 Sending frame message with {len(message['frame'])} chars base64 data")
+        await self.send_personal_message(message, websocket)
+
+    async def send_metrics_to_client(self, websocket: WebSocket, metrics: Dict):
+        """
+        Send system metrics to specific client
+
+        Args:
+            websocket: Target WebSocket connection
+            metrics: Metrics dictionary
+        """
+        message = {
+            'type': 'metrics',
+            'data': metrics
+        }
+
+        await self.send_personal_message(message, websocket)
+
     async def broadcast_known_person(self, person_data: Dict):
         """
         Broadcast known person detection

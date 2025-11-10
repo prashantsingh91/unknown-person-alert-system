@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
 from datetime import datetime
 import logging
+import config
 
 logger = logging.getLogger(__name__)
 
@@ -139,10 +140,11 @@ class UnknownPersonTracker:
         person.embedding = person.embedding / np.linalg.norm(person.embedding)
     
     def _find_matching_unknown(self, embedding: np.ndarray, bbox: np.ndarray, 
-                              current_time: float) -> Optional[str]:
+                              current_time: float) -> Tuple[Optional[str], Optional[str], float]:
         """
         Find if embedding matches any tracked unknown person
         Uses both embedding similarity and spatial-temporal proximity (Phase 2)
+        Also checks long-term matches for cooldown purposes
         
         Args:
             embedding: Face embedding to match
@@ -150,48 +152,70 @@ class UnknownPersonTracker:
             current_time: Current timestamp
             
         Returns:
-            UID of matching unknown person, or None
+            Tuple of:
+              - UID of best matching unknown person (or None)
+              - UID of any alerted-UID within cooldown that matches by similarity (or None)
+              - Similarity value for the suppression UID (0.0 if none)
         """
         best_match_uid = None
         best_score = 0.0
         best_similarity = 0.0
+        suppress_uid: Optional[str] = None
+        suppress_similarity: float = 0.0
         
         # Search through all tracked persons (including those outside cooldown)
         for uid, person in self.unknown_persons.items():
             # Calculate embedding similarity
             similarity = self._compute_similarity(embedding, person.embedding)
             
-            # Phase 2: Add spatial-temporal boost
+            time_diff = current_time - person.last_seen
+            
+            # Phase 2: Add spatial-temporal boost (for short-term matches)
             spatial_temporal_boost = 0.0
-            if person.bbox is not None:
-                time_diff = current_time - person.last_seen
+            if person.bbox is not None and time_diff <= self.temporal_window_seconds:
+                # Calculate spatial proximity (IoU)
+                iou = self._compute_iou(bbox, person.bbox)
                 
-                # Check if within temporal window
-                if time_diff <= self.temporal_window_seconds:
-                    # Calculate spatial proximity (IoU)
-                    iou = self._compute_iou(bbox, person.bbox)
-                    
-                    # If spatially close, boost the score
-                    if iou >= self.spatial_iou_threshold:
-                        spatial_temporal_boost = self.spatial_boost_score  # Configurable boost
-                        logger.info(f"🎯 {uid}: IoU={iou:.3f}, time_diff={time_diff:.2f}s, "
-                                   f"applying spatial-temporal boost (+{spatial_temporal_boost})")
+                # If spatially close, boost the score
+                if iou >= self.spatial_iou_threshold:
+                    spatial_temporal_boost = self.spatial_boost_score  # Configurable boost
+                    logger.debug(f"🎯 {uid}: IoU={iou:.3f}, time_diff={time_diff:.2f}s, "
+                                 f"applying spatial-temporal boost (+{spatial_temporal_boost})")
             
             # Combined score: embedding similarity + spatial-temporal boost
             combined_score = similarity + spatial_temporal_boost
             
-            # Match if combined score exceeds threshold
-            if combined_score >= self.similarity_threshold and combined_score > best_score:
+            # Match criteria:
+            # 1. Short-term match: combined score >= threshold (with boost)
+            # 2. Long-term match: similarity >= threshold AND within cooldown period (for preventing duplicates)
+            time_since_first_alert = current_time - person.first_seen
+            is_long_term_match = (
+                person.alerted and 
+                similarity >= self.similarity_threshold and 
+                time_since_first_alert < self.cooldown_seconds
+            )
+            
+            # Track any alerted-UID within cooldown that matches by similarity threshold (for suppression)
+            if is_long_term_match and similarity > suppress_similarity:
+                suppress_uid = uid
+                suppress_similarity = similarity
+            
+            is_short_term_match = combined_score >= self.similarity_threshold
+            
+            if (is_short_term_match or is_long_term_match) and combined_score > best_score:
                 best_score = combined_score
                 best_similarity = similarity
                 best_match_uid = uid
+                if is_long_term_match and not is_short_term_match:
+                    logger.debug(f"🔗 Long-term match: {uid} (similarity={similarity:.3f}, "
+                                 f"time_since_alert={time_since_first_alert:.1f}s, cooldown active)")
         
         if best_match_uid:
             boost_applied = best_score - best_similarity
             logger.info(f"✅ Matched to {best_match_uid} with similarity={best_similarity:.3f}, "
                         f"boost={boost_applied:.3f}, final_score={best_score:.3f}")
         
-        return best_match_uid
+        return best_match_uid, suppress_uid, suppress_similarity
     
     def _save_snapshot(self, frame: np.ndarray, bbox: np.ndarray, uid: str) -> str:
         """
@@ -262,9 +286,73 @@ class UnknownPersonTracker:
             Tuple of (should_alert, uid, snapshot_path)
         """
         current_time = time.time()
-        
+
+        # Prepare similarity scores (for quick suppression decision)
+        similarity_scores = []
+        if len(self.unknown_persons) > 0:
+            logger.info("=" * 80)
+            logger.info(f"🔍 Checking new detection against {len(self.unknown_persons)} existing unknown person(s):")
+            for uid, person in self.unknown_persons.items():
+                similarity = self._compute_similarity(embedding, person.embedding)
+                time_diff = current_time - person.last_seen
+
+                # Calculate spatial boost potential
+                spatial_boost = 0.0
+                if person.bbox is not None and time_diff <= self.temporal_window_seconds:
+                    iou = self._compute_iou(bbox, person.bbox)
+                    if iou >= self.spatial_iou_threshold:
+                        spatial_boost = self.spatial_boost_score
+
+                combined_score = similarity + spatial_boost
+                similarity_scores.append({
+                    'uid': uid,
+                    'similarity': similarity,
+                    'spatial_boost': spatial_boost,
+                    'combined_score': combined_score,
+                    'time_diff': time_diff,
+                    'alerted': person.alerted,
+                    'detection_count': person.detection_count,
+                    'meets_threshold': combined_score >= self.similarity_threshold
+                })
+
+                status = "✅ MATCH" if combined_score >= self.similarity_threshold else "❌ NO MATCH"
+                boost_info = f"(+{spatial_boost:.2f} boost)" if spatial_boost > 0 else ""
+                logger.info(f"  {status} {uid}: similarity={similarity:.3f} {boost_info} → combined={combined_score:.3f} "
+                            f"(threshold={self.similarity_threshold:.3f}) | "
+                            f"time_diff={time_diff:.2f}s | alerted={person.alerted} | detections={person.detection_count}")
+
+            # Log best match summary
+            if similarity_scores:
+                best_match = max(similarity_scores, key=lambda x: x['combined_score'])
+                logger.info(f"📊 Best match: {best_match['uid']} with combined_score={best_match['combined_score']:.3f} "
+                            f"(similarity={best_match['similarity']:.3f} + boost={best_match['spatial_boost']:.3f})")
+            logger.info("=" * 80)
+
         # Try to match against existing unknown persons (Phase 2: with spatial-temporal)
-        matching_uid = self._find_matching_unknown(embedding, bbox, current_time)
+        matching_uid, suppress_uid, suppress_sim = self._find_matching_unknown(embedding, bbox, current_time)
+
+        # Quick suppression: if no matching_uid but an existing UID has a combined score above
+        # QUICK_SUPPRESSION_THRESHOLD, merge this detection into that UID instead of creating a new one.
+        if (not matching_uid) and config.QUICK_SUPPRESSION_ENABLED and similarity_scores:
+            best_candidate = max(similarity_scores, key=lambda x: x['combined_score'])
+            if best_candidate['combined_score'] >= getattr(config, 'QUICK_SUPPRESSION_THRESHOLD', 0.45):
+                chosen_uid = best_candidate['uid']
+                logger.info(f"🔒 Quick suppression: merging detection into existing {chosen_uid} "
+                            f"(combined_score={best_candidate['combined_score']:.3f} >= "
+                            f"{config.QUICK_SUPPRESSION_THRESHOLD:.3f})")
+                # Update the chosen UID with this embedding
+                person = self.unknown_persons.get(chosen_uid)
+                if person is not None:
+                    person.last_seen = current_time
+                    person.detection_count += 1
+                    self._update_embedding_average(person, embedding)
+                    # Update bbox history for spatial tracking
+                    person.bbox = bbox.copy()
+                    person.bbox_history.append((bbox.copy(), current_time))
+                    if len(person.bbox_history) > 10:
+                        person.bbox_history.pop(0)
+                    # Treat as matched now
+                    matching_uid = chosen_uid
         
         if matching_uid:
             # Found existing unknown person
@@ -286,19 +374,69 @@ class UnknownPersonTracker:
             time_since_first_alert = current_time - person.first_seen
             in_cooldown = person.alerted and (time_since_first_alert < self.cooldown_seconds)
             
-            # Check if should alert
+            # Check if should alert (respect warmup window if enabled)
+            warmup_ok = True
+            if getattr(config, 'NEW_UID_WARMUP_ENABLED', False):
+                warmup_ok = (current_time - person.first_seen) >= getattr(config, 'NEW_UID_WARMUP_WINDOW', 0.6)
+
             should_alert = (
                 person.detection_count >= self.min_detections_before_alert and
                 not person.alerted and
-                not in_cooldown
+                not in_cooldown and
+                warmup_ok
             )
             
             if should_alert:
+                # Log similarity check before alerting
+                logger.info("=" * 80)
+                logger.info(f"🚨 PRE-ALERT CHECK for {matching_uid}:")
+                logger.info(f"   Detection count: {person.detection_count}/{self.min_detections_before_alert}")
+                logger.info(f"   Already alerted: {person.alerted}")
+                logger.info(f"   Time since first seen: {time_since_first_alert:.2f}s (cooldown: {self.cooldown_seconds}s)")
+                
+                # Check similarity with all other unknown persons before alerting
+                # If another UID is already alerted and has high similarity, suppress this alert
+                if len(self.unknown_persons) > 1:
+                    logger.info(f"   Checking similarity with {len(self.unknown_persons) - 1} other unknown person(s):")
+                    for other_uid, other_person in self.unknown_persons.items():
+                        if other_uid != matching_uid:
+                            similarity = self._compute_similarity(person.embedding, other_person.embedding)
+                            time_diff_other = current_time - other_person.first_seen
+                            logger.info(f"     vs {other_uid}: similarity={similarity:.3f} "
+                                      f"(threshold={self.similarity_threshold:.3f}) | "
+                                      f"other_alerted={other_person.alerted} | "
+                                      f"time_since_other_first_seen={time_diff_other:.2f}s")
+                            
+                            # Quick suppression: if another UID is already alerted and similarity is high, suppress this alert
+                            if (getattr(config, 'QUICK_SUPPRESSION_ENABLED', True) and 
+                                other_person.alerted and 
+                                similarity >= getattr(config, 'QUICK_SUPPRESSION_THRESHOLD', 0.45)):
+                                logger.warning(f"     ⚠️  WARNING: High similarity ({similarity:.3f}) with already-alerted {other_uid}!")
+                                logger.info(f"🛑 Alert suppressed for {matching_uid}: similar to already-alerted "
+                                          f"{other_uid} (similarity={similarity:.3f} >= "
+                                          f"quick_suppression_threshold={getattr(config, 'QUICK_SUPPRESSION_THRESHOLD', 0.45):.3f})")
+                                logger.info("=" * 80)
+                                return False, matching_uid, person.snapshot_path
+                            elif similarity >= self.similarity_threshold:
+                                logger.warning(f"     ⚠️  WARNING: High similarity detected! These might be the same person!")
+                
+                # Cross-UID suppression result from the matching pass
+                if suppress_uid and suppress_uid != matching_uid:
+                    logger.info(
+                        f"🛑 Alert suppressed for {matching_uid}: similar to already-alerted "
+                        f"{suppress_uid} within cooldown (similarity={suppress_sim:.3f} >= "
+                        f"threshold={self.similarity_threshold:.3f})"
+                    )
+                    logger.info("=" * 80)
+                    return False, matching_uid, person.snapshot_path
+                
                 # Save snapshot on first alert
                 person.snapshot_path = self._save_snapshot(frame, bbox, matching_uid)
                 person.alerted = True
-                logger.info(f"🚨 Alert: Unknown person {matching_uid} confirmed "
+                logger.info(f"✅ ALERT TRIGGERED: Unknown person {matching_uid} confirmed "
                           f"(detections={person.detection_count})")
+                logger.info("=" * 80)
+                
                 return True, matching_uid, person.snapshot_path
             else:
                 if in_cooldown:
@@ -311,6 +449,12 @@ class UnknownPersonTracker:
         
         # New unknown person - create tracking entry (but don't alert yet)
         uid = self._generate_uid()
+        
+        # Log why no match was found
+        if len(self.unknown_persons) > 0:
+            logger.warning(f"⚠️  No match found! Creating new UID: {uid}")
+            logger.warning(f"   Reason: All existing unknown persons had similarity < {self.similarity_threshold:.3f} threshold")
+            logger.warning(f"   This may indicate: (1) Different person, (2) High embedding variance, or (3) Threshold too strict")
         
         unknown_person = UnknownPerson(
             uid=uid,
@@ -343,6 +487,13 @@ class UnknownPersonTracker:
         for uid in expired_uids:
             logger.debug(f"Removing expired unknown person: {uid}")
             del self.unknown_persons[uid]
+    
+    def reset(self):
+        """Reset tracker - clear all tracked unknown persons"""
+        logger.info("🔄 Resetting unknown person tracker - clearing all tracked persons")
+        self.unknown_persons.clear()
+        self.next_uid = 1
+        logger.info("✅ Unknown person tracker reset complete")
     
     def get_active_unknowns(self) -> List[Dict]:
         """Get list of currently tracked unknown persons"""
